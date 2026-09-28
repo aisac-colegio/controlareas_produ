@@ -1,0 +1,1933 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <!--
+        Dashboard de estadisticas.
+
+        Esta vista es renderizada por GET /admin/verdatos y recibe desde el backend los datos de sesion:
+        - nombre: nombre legible del usuario conectado.
+        - username: identificador de usuario conectado.
+        - role: rol legible del usuario conectado.
+
+        Los datos estadisticos NO vienen renderizados directamente en el HTML inicial.
+        Se cargan despues con JavaScript desde /api/estadisticas, segun los filtros activos.
+
+        Dependencias de cliente:
+        - /estilos.css: estilos generales del sistema y clases compartidas, incluido "hidden".
+        - Chart.js: graficos de dona y linea.
+        - html2pdf.js: convierte el reporte HTML temporal a PDF.
+    -->
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard de Estadísticas</title>
+    <link rel="stylesheet" href="/estilos.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    <style>
+        /*
+            Estilos locales de esta vista.
+
+            La pantalla de reportes es mas compleja que otras vistas, por eso aqui se definen estilos
+            propios para dashboard, filtros, tarjetas, graficos, tablas, modo impresion y responsive.
+            Los estilos generales del sitio siguen entrando por /estilos.css.
+        */
+
+        /* Reset basico para evitar espacios inesperados y calcular anchos con padding incluido. */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        /*
+            Cuerpo de la pagina:
+            - Usa tema oscuro.
+            - Permite scroll vertical porque las tablas pueden crecer bastante.
+            - Bloquea scroll horizontal global; las tablas manejan su propio overflow.
+        */
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #111827;
+            min-height: 100vh;
+            height: auto;
+            padding: 0;
+            color: #e0e0e0;
+            overflow-x: hidden;
+            overflow-y: auto;
+        }
+
+        /*
+            Tarjeta principal del dashboard.
+            El ancho maximo mantiene legible la informacion en pantallas grandes,
+            y calc(100% - 40px) deja margen lateral en pantallas medianas.
+        */
+        .container-dashboard {
+            width: min(1400px, calc(100% - 40px));
+            max-width: 1400px;
+            margin: 20px auto;
+            background: #1f2937;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+            overflow: visible;
+            border: 1px solid #374151;
+        }
+
+        /*
+            Encabezado interno del reporte.
+            Muestra titulo a la izquierda y datos del usuario a la derecha.
+            flex-wrap permite que el bloque de usuario baje en pantallas angostas.
+        */
+        .header-dashboard {
+            background: #111827;
+            color: white;
+            padding: 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+
+        .header-dashboard h1 {
+            font-size: 28px;
+            font-weight: 600;
+        }
+
+        .header-dashboard .usuario-info {
+            text-align: right;
+        }
+
+        .header-dashboard .usuario-info p {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+
+        .content-dashboard {
+            padding: 30px;
+        }
+
+        /*
+            Barra de filtros.
+            Todos los controles comparten este contenedor: periodo, area, busqueda por persona,
+            navegacion temporal y botones de descarga.
+        */
+        .filtros-section {
+            background: #273241;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 30px;
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+            align-items: center;
+            border: 1px solid #374151;
+        }
+
+        /* Etiquetas visibles que separan grupos de controles dentro de filtros-section. */
+        .filtros-section label {
+            font-weight: 600;
+            color: #cbd5e0;
+            margin-right: 10px;
+        }
+
+        /*
+            Grupo de navegacion temporal.
+            Incluye botones anterior/siguiente, selectores de mes/ano y texto del rango actual.
+        */
+        .periodo-navegacion {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 0;
+            flex-wrap: wrap;
+            align-items: center;
+            min-width: 0;
+        }
+
+        /* Texto que resume el rango aplicado: "Hoy: fecha - fecha" o "Busqueda por persona...". */
+        .periodo-rango {
+            color: #cbd5e0;
+            font-weight: 600;
+            margin-left: auto;
+        }
+
+        /*
+            Selectores especiales de periodo.
+            Permanecen ocultos por defecto y el JavaScript los muestra solamente cuando aplica:
+            - mensual: selector de mes + ano.
+            - anual: selector de ano.
+        */
+        .selector-periodo {
+            display: none;
+            gap: 10px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .selector-periodo.visible {
+            display: flex;
+        }
+
+        /*
+            Botones de filtro y navegacion.
+            La clase "activo" marca visualmente el periodo seleccionado.
+        */
+        .filtro-btn {
+            padding: 10px 20px;
+            border: 1px solid #64748b;
+            background: transparent;
+            color: #d1d5db;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            font-size: 14px;
+        }
+
+        .filtro-btn:hover {
+            background: #64748b;
+            color: white;
+            transform: translateY(-2px);
+        }
+
+        .filtro-btn.activo {
+            background: #64748b;
+            color: white;
+        }
+
+        /*
+            Controles de tipo select/input dentro de la barra de filtros.
+            El nombre historico "select-area" se reutiliza para selects e inputs de busqueda.
+        */
+        .select-area {
+            padding: 10px 15px;
+            border: 1px solid #4b5563;
+            border-radius: 5px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            background: #1f2937;
+            color: #e0e0e0;
+            min-width: 0;
+        }
+
+        .select-area:focus {
+            outline: none;
+            border-color: #d1d5db;
+            box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.18);
+        }
+
+        /* Botones de exportacion. Excel esta visible; PDF existe pero inicia oculto con clase hidden. */
+        .btn-descargar {
+            background: #334155;
+            color: white;
+            border: none;
+            padding: 12px 25px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            margin-left: auto;
+        }
+
+        .btn-descargar:hover {
+            background: #475569;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(15, 23, 42, 0.25);
+        }
+
+        /*
+            Grid de metricas superiores.
+            auto-fit permite que las cuatro tarjetas bajen de linea cuando no hay espacio.
+        */
+        .metricas {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        /* Tarjeta individual de metrica: total, areas activas, promedio o area mas visitada. */
+        .metrica {
+            background: #273241;
+            color: white;
+            padding: 25px;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+            border: 1px solid #3f4a5a;
+        }
+
+        .metrica h3 {
+            font-size: 14px;
+            opacity: 0.85;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .metrica .valor {
+            font-size: 32px;
+            font-weight: 700;
+        }
+
+        /*
+            Contenedor de graficos.
+            Usa dos columnas cuando hay espacio y una sola columna en movil.
+        */
+        .graficos-section {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(min(400px, 100%), 1fr));
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+
+        .grafico-container {
+            background: #273241;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+            border: 1px solid #374151;
+        }
+
+        .grafico-container h2 {
+            color: #cbd5e0;
+            margin-bottom: 20px;
+            font-size: 18px;
+        }
+
+        /*
+            Wrapper de tablas.
+            Las tablas pueden ser mas anchas que la pantalla; este contenedor les da scroll horizontal
+            sin romper el ancho completo del dashboard.
+        */
+        .tabla-scroll {
+            width: 100%;
+            overflow-x: auto;
+            overflow-y: visible;
+            -webkit-overflow-scrolling: touch;
+            border-radius: 10px;
+            margin-top: 30px;
+            border: 1px solid #374151;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        }
+
+        /*
+            Tabla base usada por las tres tablas:
+            - detalle por area,
+            - registros individuales,
+            - evolucion diaria.
+        */
+        .tabla-estadisticas {
+            width: 100%;
+            min-width: 680px;
+            border-collapse: collapse;
+            background: #1f2937;
+        }
+
+        .tabla-estadisticas thead {
+            background: #273241;
+            color: white;
+        }
+
+        .tabla-estadisticas th,
+        .tabla-estadisticas td {
+            padding: 15px;
+            text-align: left;
+            border-bottom: 1px solid #374151;
+            white-space: normal;
+        }
+
+        .tabla-estadisticas tbody tr:hover {
+            background: #273241;
+        }
+
+        .tabla-estadisticas tbody tr:last-child td {
+            border-bottom: none;
+        }
+
+        .tabla-estadisticas tbody td {
+            color: #cbd5e0;
+            word-break: break-word;
+        }
+
+        /*
+            Badge visual para resaltar nombres de area dentro de las tablas.
+            Se usa en datos generados dinamicamente por actualizarTablas().
+        */
+        .badge {
+            display: inline-block;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .badge-area {
+            background: #334155;
+            color: white;
+        }
+
+        /*
+            Estado de carga inicial de tablas.
+            El pseudo-elemento dibuja un spinner mientras JavaScript consulta /api/estadisticas.
+        */
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+
+        .loading::after {
+            content: '';
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #64748b;
+            border-top: 3px solid transparent;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-left: 10px;
+            vertical-align: middle;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        /*
+            Seccion que agrupa las tablas del reporte.
+            El id reporteContent tambien sirve como referencia logica del area exportable.
+        */
+        .reporte-section {
+            background: #273241;
+            padding: 20px;
+            border-radius: 10px;
+            margin-top: 30px;
+            border: 1px solid #374151;
+        }
+
+        .reporte-section h2 {
+            color: #cbd5e0;
+            margin-bottom: 20px;
+            font-size: 20px;
+        }
+
+        .info-reporte {
+            background: #1f2937;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 4px solid #64748b;
+            font-size: 14px;
+            color: #999;
+        }
+
+        .info-reporte strong {
+            color: #cbd5e0;
+        }
+
+        /*
+            Modo impresion del navegador.
+            Aunque el PDF se genera con html2pdf, estas reglas tambien dejan la pagina legible
+            si alguien usa Ctrl+P directamente.
+        */
+        @media print {
+            body {
+                background: white;
+                padding: 0;
+                color: #000;
+            }
+
+            .container-dashboard {
+                box-shadow: none;
+                border-radius: 0;
+                background: white;
+                border: none;
+            }
+
+            .header-dashboard {
+                background: #f8f9fa;
+                color: #333;
+            }
+
+            .filtros-section,
+            .btn-descargar {
+                display: none;
+            }
+
+            .grafico-container,
+            .reporte-section {
+                background: white;
+                border: 1px solid #ddd;
+                color: #000;
+            }
+
+            .grafico-container h2,
+            .reporte-section h2 {
+                color: #333;
+            }
+
+            .tabla-estadisticas {
+                background: white;
+                border: 1px solid #ddd;
+                color: #000;
+            }
+
+            .tabla-estadisticas thead {
+                background: #f8f9fa;
+                color: #333;
+            }
+
+            .tabla-estadisticas th,
+            .tabla-estadisticas td {
+                border-bottom: 1px solid #ddd;
+                color: #000;
+            }
+
+            .tabla-estadisticas tbody td {
+                color: #000;
+            }
+
+            .metricas {
+                margin-bottom: 20px;
+            }
+
+            .metrica {
+                background: #f8f9fa;
+                color: #333;
+                border: 1px solid #ddd;
+            }
+
+            .metrica h3 {
+                color: #666;
+            }
+
+            .metrica .valor {
+                color: #333;
+            }
+
+            .info-reporte {
+                background: #fff;
+                border-left: 4px solid #666;
+                color: #666;
+            }
+
+            .info-reporte strong {
+                color: #000;
+            }
+        }
+
+        /*
+            Ajustes para pantallas pequenas.
+            Los filtros pasan a columna, las tablas conservan scroll horizontal
+            y el contenedor ocupa todo el ancho para aprovechar espacio.
+        */
+        @media (max-width: 768px) {
+            body {
+                padding: 0;
+            }
+
+            .container-dashboard {
+                width: 100%;
+                margin: 0;
+                border-left: none;
+                border-right: none;
+                border-radius: 0;
+            }
+
+            .content-dashboard {
+                padding: 14px;
+            }
+
+            .header-dashboard {
+                flex-direction: column;
+                text-align: center;
+                padding: 20px 16px;
+            }
+
+            .header-dashboard h1 {
+                font-size: 22px;
+                line-height: 1.2;
+            }
+
+            .header-dashboard .usuario-info {
+                text-align: center;
+            }
+
+            .filtros-section {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 10px;
+            }
+
+            .periodo-navegacion {
+                flex-direction: column;
+                align-items: stretch;
+                width: 100%;
+            }
+
+            .periodo-rango {
+                margin-left: 0;
+                text-align: center;
+            }
+
+            .filtro-btn,
+            .select-area,
+            .btn-descargar {
+                width: 100%;
+                min-height: 42px;
+            }
+
+            .btn-descargar {
+                margin-left: 0;
+            }
+
+            .graficos-section {
+                grid-template-columns: 1fr;
+                gap: 20px;
+            }
+
+            .grafico-container {
+                padding: 16px;
+                min-width: 0;
+            }
+
+            .tabla-estadisticas th,
+            .tabla-estadisticas td {
+                padding: 10px;
+                font-size: 14px;
+            }
+
+            .tabla-estadisticas {
+                min-width: 620px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!--
+        Header compartido del sistema.
+        Se incluye aqui dentro del body porque esta pagina define su propio documento HTML,
+        estilos locales y scripts de dashboard.
+    -->
+    <%- include('partials/header') %>
+
+    <!--
+        Contenedor principal del reporte.
+        Dentro se agrupan, en este orden:
+        1. Encabezado ejecutivo con datos del usuario.
+        2. Controles de filtrado y exportacion.
+        3. Tarjetas de metricas.
+        4. Graficos Chart.js.
+        5. Tablas detalladas para auditoria y lectura precisa.
+    -->
+    <div class="container-dashboard">
+        <!--
+            Encabezado visual del dashboard.
+            Los datos EJS de nombre, username y role vienen desde datosSesion(req).
+            Sirven tambien para identificar quien genero el reporte.
+        -->
+        <div class="header-dashboard">
+            <div>
+                <h1>📊 Dashboard de Estadísticas</h1>
+                <p style="margin-top: 5px;">Sistema de Control de Áreas - Panel Ejecutivo</p>
+            </div>
+            <div class="usuario-info">
+                <p><strong><%= nombre %></strong></p>
+                <p><%= username %> | <%= role %></p>
+            </div>
+        </div>
+
+        <!-- Contenido interactivo del dashboard. Todo lo que cambia por filtros esta dentro de este bloque. -->
+        <div class="content-dashboard">
+            <!--
+                Barra de filtros.
+
+                Cada control llama funciones de JavaScript declaradas al final del archivo:
+                - cambiarFiltro(): cambia el periodo base.
+                - cambiarArea(): aplica filtro por area.
+                - cargarDatos(): consulta de nuevo la API al escribir carnet/cedula o cambiar selectores.
+                - navegarPeriodo(): retrocede o avanza dia, semana, mes o ano.
+                - descargarExcel()/descargarPDF(): exportan los datos actualmente filtrados.
+            -->
+            <div class="filtros-section">
+                <label>Filtrar por período:</label>
+                <!--
+                    Filtros de periodo.
+                    El boton HOY inicia activo porque filtroActual se inicializa como "hoy" en JavaScript.
+                -->
+                <button class="filtro-btn activo" onclick="cambiarFiltro('hoy')">HOY</button>
+                <button class="filtro-btn" onclick="cambiarFiltro('semanal')">SEMANAL</button>
+                <button class="filtro-btn" onclick="cambiarFiltro('mensual')">MENSUAL</button>
+                <button class="filtro-btn" onclick="cambiarFiltro('anual')">ANUAL</button>
+
+                <label style="margin-left: 20px;">Filtrar por área:</label>
+                <!--
+                    El select de areas empieza solo con "Todas".
+                    cargarDatos() lo llena una sola vez con datos.todasLasAreas recibido desde /api/estadisticas.
+                    El value de cada opcion es idareas, que el backend usa para filtrar registros.
+                -->
+                <select id="selectArea" class="select-area" onchange="cambiarArea()">
+                    <option value="">Todas las áreas</option>
+                </select>
+
+                <label>Buscar:</label>
+                <!--
+                    Filtros de persona.
+                    Permiten buscar registros por carnet o cedula.
+                    En carnet, cargarDatos() completa con ceros a la izquierda cuando son 1 a 6 digitos.
+                    Cuando se busca por persona, el backend omite el filtro de rango de fecha y trae el historial
+                    que coincida con carnet/cedula y area si esta seleccionada.
+                -->
+                <input type="text" id="filtroCarnet" class="select-area" placeholder="Carnet" inputmode="numeric" maxlength="6" oninput="cargarDatos()">
+                <input type="text" id="filtroCedula" class="select-area" placeholder="Cedula" oninput="cargarDatos()">
+
+                <!--
+                    Navegacion por periodos.
+                    Los textos de los botones cambian segun el filtro activo:
+                    Dia, Semana, Mes o Ano anterior/siguiente.
+                -->
+                <div class="periodo-navegacion">
+                    <button class="filtro-btn" id="btnPeriodoAnterior" onclick="navegarPeriodo(-1)">Dia Anterior</button>
+                    <button class="filtro-btn" id="btnPeriodoSiguiente" onclick="navegarPeriodo(1)">D&iacute;a Siguiente</button>
+                    <!--
+                        Selector mensual.
+                        Se muestra solo si filtroActual === "mensual".
+                        El backend recibe mes y anio para calcular el rango exacto.
+                    -->
+                    <div class="selector-periodo" id="selectorMesAnio">
+                        <select id="selectMes" class="select-area" onchange="cargarDatos()">
+                            <option value="1">Enero</option>
+                            <option value="2">Febrero</option>
+                            <option value="3">Marzo</option>
+                            <option value="4">Abril</option>
+                            <option value="5">Mayo</option>
+                            <option value="6">Junio</option>
+                            <option value="7">Julio</option>
+                            <option value="8">Agosto</option>
+                            <option value="9">Septiembre</option>
+                            <option value="10">Octubre</option>
+                            <option value="11">Noviembre</option>
+                            <option value="12">Diciembre</option>
+                        </select>
+                        <select id="selectAnioMensual" class="select-area" onchange="cargarDatos()"></select>
+                    </div>
+                    <!--
+                        Selector anual.
+                        Se muestra solo si filtroActual === "anual".
+                        Sus opciones se generan dinamicamente en llenarSelectoresFecha().
+                    -->
+                    <div class="selector-periodo" id="selectorAnio">
+                        <select id="selectAnio" class="select-area" onchange="cargarDatos()"></select>
+                    </div>
+                    <!-- Resumen textual del periodo aplicado; se actualiza con la respuesta de /api/estadisticas. -->
+                    <span class="periodo-rango" id="rangoPeriodo">Periodo actual</span>
+                </div>
+
+                <!--
+                    Botones de descarga.
+                    Excel descarga desde el backend (/api/exportar-excel).
+                    PDF se genera en cliente con html2pdf.js; actualmente inicia oculto por la clase hidden.
+                -->
+                <div style="display: flex; gap: 10px;">
+                    <button class="btn-descargar" onclick="descargarExcel()">📊 Descargar Excel</button>
+                    <button class="hidden btn-descargar" onclick="descargarPDF()">📥 Descargar PDF</button>
+                </div>
+            </div>
+
+            <!-- Métricas principales -->
+            <!--
+                Metricas principales.
+                Estos valores inician en cero y se actualizan en actualizarMetricas(datos).
+            -->
+            <div class="metricas" id="metricas">
+                <div class="metrica">
+                    <h3>Total de Visitas</h3>
+                    <div class="valor" id="totalVisitas">0</div>
+                </div>
+                <div class="metrica">
+                    <h3>Áreas Activas</h3>
+                    <div class="valor" id="areasActivas">0</div>
+                </div>
+                <div class="metrica">
+                    <h3>Promedio Diario</h3>
+                    <div class="valor" id="promedioDiario">0</div>
+                </div>
+                <div class="metrica">
+                    <h3>Área Más Visitada</h3>
+                    <div class="valor" id="areaMasVisitada" style="font-size: 20px;">-</div>
+                </div>
+            </div>
+
+            <!-- Gráficos -->
+            <!--
+                Graficos Chart.js.
+                - graficoAreas: dona con visitas agrupadas por area.
+                - graficoEvolucion: linea con cantidad de visitas por fecha.
+                actualizarGraficos() destruye instancias anteriores antes de dibujar de nuevo.
+            -->
+            <div class="graficos-section" id="graficosContainer">
+                <div class="grafico-container">
+                    <h2>Visitas por Área</h2>
+                    <canvas id="graficoAreas"></canvas>
+                </div>
+                <div class="grafico-container">
+                    <h2>Evolución de Visitas</h2>
+                    <canvas id="graficoEvolucion"></canvas>
+                </div>
+            </div>
+
+            <!-- Tabla detallada de áreas debajo del gráfico de dona -->
+            <!--
+                Tablas del reporte.
+
+                Las tablas son importantes porque muestran el dato exacto que respalda los graficos.
+                Todas se llenan desde actualizarTablas(datos) despues de la consulta a /api/estadisticas.
+            -->
+            <div class="reporte-section" id="reporteContent">
+                <h2>Detalle de Visitas por Área</h2>
+                <!--
+                    Metadatos visibles del reporte.
+                    fechaReporte y periodoReporte se actualizan en cargarDatos().
+                -->
+                <div class="info-reporte">
+                    <strong>Reporte generado por:</strong> <%= nombre %> (<%= username %>) | 
+                    <strong>Período:</strong> <span id="periodoReporte">Hoy</span> | 
+                    <strong>Fecha:</strong> <span id="fechaReporte"></span>
+                </div>
+                <!--
+                    Tabla 1: resumen por area.
+                    Muestra posicion, area, total de visitas, porcentaje sobre el total y periodo activo.
+                -->
+                <div class="tabla-scroll">
+                <table class="tabla-estadisticas">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Área</th>
+                            <th>Total Visitas</th>
+                            <th>Porcentaje</th>
+                            <th>Período</th>
+                        </tr>
+                    </thead>
+                    <tbody id="cuerpoTablaAreas">
+                        <tr>
+                            <td colspan="5" class="loading">Cargando datos...</td>
+                        </tr>
+                    </tbody>
+                </table>
+                </div>
+
+                <h2 style="margin-top: 40px;">Todos los Registros</h2>
+                <!--
+                    Tabla 2: registros individuales.
+                    Sirve para auditoria: carnet/agremiado, cedula, area, fecha de ingreso y usuario registrador.
+                -->
+                <div class="tabla-scroll">
+                <table class="tabla-estadisticas">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Agremiado</th>
+                            <th>Cedula</th>
+                            <th>Área</th>
+                            <th>Fecha de Ingreso</th>
+                            <th>Usuario Registrador</th>
+                        </tr>
+                    </thead>
+                    <tbody id="cuerpoTablaRegistros">
+                        <tr>
+                            <td colspan="6" class="loading">Cargando datos...</td>
+                        </tr>
+                    </tbody>
+                </table>
+                </div>
+
+                <h2 style="margin-top: 40px;">Evolución Diaria</h2>
+                <div class="tabla-scroll">
+                <table class="tabla-estadisticas">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Fecha</th>
+                            <th>Visitas</th>
+                        </tr>
+                    </thead>
+                    <!--
+                        Cuerpo de la tabla de evolucion diaria.
+                        El contenido real reemplaza el estado de carga en actualizarTablas().
+                    -->
+                    <tbody id="cuerpoTablaDiaria">
+                        <tr>
+                            <td colspan="3" class="loading">Cargando datos...</td>
+                        </tr>
+                    </tbody>
+                </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ============================================================
+        // LOGICA DEL DASHBOARD
+        // Esta parte controla lo que ocurre sin recargar la pagina:
+        // cambia filtros, pide datos al servidor, dibuja graficos,
+        // llena tablas y prepara descargas en Excel o PDF.
+        // ============================================================
+        /*
+            Estado global del dashboard.
+
+            filtroActual:
+                Periodo seleccionado por el usuario. Valores esperados:
+                - "hoy"
+                - "semanal"
+                - "mensual"
+                - "anual"
+
+            areaActual:
+                idareas seleccionado en el combo de areas. Cadena vacia significa "Todas".
+
+            periodoOffset:
+                Desplazamiento relativo para dia/semana. Por ejemplo:
+                - 0: periodo actual.
+                - -1: periodo anterior.
+                - 1: periodo siguiente.
+                Para mensual/anual se usan directamente los selectores de mes/ano.
+
+            chartsInstances:
+                Guarda las instancias Chart.js actuales para destruirlas antes de redibujar.
+                Esto evita que Chart.js acumule graficos viejos sobre el mismo canvas.
+
+            datosGlobales:
+                Ultima respuesta recibida desde /api/estadisticas.
+                Se reutiliza para construir el PDF sin volver a consultar la API.
+
+            fechaBase:
+                Fecha del navegador al abrir la pagina. Sirve para llenar selectores iniciales.
+        */
+        let filtroActual = 'hoy';
+        let areaActual = '';
+        let periodoOffset = 0;
+        let chartsInstances = {};
+        let datosGlobales = {};
+        const fechaBase = new Date();
+
+        function llenarSelectoresFecha() {
+            /*
+                Llena los combos de mes y ano para periodos especificos.
+
+                - selectMes arranca en el mes actual.
+                - selectAnioMensual y selectAnio reciben un rango amplio: 20 anos hacia adelante
+                  y 20 hacia atras desde el ano actual.
+                - Ambos selectores de ano comparten el mismo rango, aunque uno se use para mensual
+                  y el otro para anual.
+            */
+            const anioActual = fechaBase.getFullYear();
+            const selectMes = document.getElementById('selectMes');
+            const selectAnioMensual = document.getElementById('selectAnioMensual');
+            const selectAnio = document.getElementById('selectAnio');
+
+            selectMes.value = String(fechaBase.getMonth() + 1);
+            [selectAnioMensual, selectAnio].forEach(select => {
+                select.innerHTML = '';
+                for (let anio = anioActual + 20; anio >= anioActual - 20; anio--) {
+                    const option = document.createElement('option');
+                    option.value = anio;
+                    option.textContent = anio;
+                    select.appendChild(option);
+                }
+                select.value = String(anioActual);
+            });
+        }
+
+        function actualizarControlesPeriodo() {
+            /*
+                Ajusta los controles que dependen del periodo activo.
+
+                1. Cambia los textos de los botones anterior/siguiente.
+                2. Muestra selector de mes+ano solo para "mensual".
+                3. Muestra selector de ano solo para "anual".
+
+                Los filtros "hoy" y "semanal" usan periodoOffset; por eso no necesitan selectores extra.
+            */
+            const etiquetas = {
+                hoy: ['Dia Anterior', 'Dia Siguiente'],
+                semanal: ['Semana Anterior', 'Semana Siguiente'],
+                mensual: ['Mes Anterior', 'Mes Siguiente'],
+                anual: ['Año Anterior', 'Año Siguiente']
+            };
+            const [anterior, siguiente] = etiquetas[filtroActual] || etiquetas.hoy;
+            document.getElementById('btnPeriodoAnterior').textContent = anterior;
+            document.getElementById('btnPeriodoSiguiente').textContent = siguiente;
+            document.getElementById('selectorMesAnio').classList.toggle('visible', filtroActual === 'mensual');
+            document.getElementById('selectorAnio').classList.toggle('visible', filtroActual === 'anual');
+        }
+
+        // Cambiar filtro de fecha
+        function cambiarFiltro(filtro) {
+            /*
+                Cambia el periodo principal del dashboard.
+
+                Se reinicia periodoOffset a 0 porque al pasar, por ejemplo, de "semana anterior"
+                a "hoy", lo esperable es volver al periodo actual.
+
+                Nota: esta funcion depende del objeto global "event" porque se llama desde onclick inline.
+                Si en el futuro se migra a addEventListener, conviene recibir el evento como parametro.
+            */
+            filtroActual = filtro;
+            periodoOffset = 0;
+            document.querySelectorAll('.filtro-btn').forEach(btn => btn.classList.remove('activo'));
+            event.target.classList.add('activo');
+            actualizarControlesPeriodo();
+            cargarDatos();
+        }
+
+        function navegarPeriodo(direccion) {
+            /*
+                Mueve el reporte hacia atras o adelante en el tiempo.
+
+                direccion:
+                    -1 para periodo anterior.
+                     1 para periodo siguiente.
+
+                Reglas:
+                - mensual: cambia selectMes/selectAnioMensual y maneja cambio de ano al pasar de enero/diciembre.
+                - anual: incrementa o reduce selectAnio.
+                - hoy/semanal: modifica periodoOffset y deja que el backend calcule fechas.
+            */
+            if (filtroActual === 'mensual') {
+                const selectMes = document.getElementById('selectMes');
+                const selectAnio = document.getElementById('selectAnioMensual');
+                let mes = parseInt(selectMes.value, 10) + direccion;
+                let anio = parseInt(selectAnio.value, 10);
+
+                if (mes < 1) {
+                    mes = 12;
+                    anio--;
+                } else if (mes > 12) {
+                    mes = 1;
+                    anio++;
+                }
+
+                selectMes.value = String(mes);
+                selectAnio.value = String(anio);
+            } else if (filtroActual === 'anual') {
+                const selectAnio = document.getElementById('selectAnio');
+                selectAnio.value = String(parseInt(selectAnio.value, 10) + direccion);
+            } else {
+                periodoOffset += direccion;
+            }
+
+            cargarDatos();
+        }
+
+        // Cambiar filtro de área
+        function cambiarArea() {
+            /*
+                Guarda el area seleccionada y refresca el dashboard.
+                El valor viene del selectArea:
+                - "" significa todas las areas.
+                - idareas filtra una area especifica.
+            */
+            areaActual = document.getElementById('selectArea').value;
+            cargarDatos();
+        }
+
+        // Obtener nombre del período
+        function getNombrePeriodo(filtro) {
+            /*
+                Convierte el codigo interno del filtro en texto entendible para mostrarlo
+                en la barra de rango y en los metadatos del reporte.
+            */
+            const periodos = {
+                'hoy': 'Hoy',
+                'semanal': 'Semanal (Última semana)',
+                'mensual': 'Mensual (Este mes)',
+                'anual': 'Anual (Este año)'
+            };
+            return periodos[filtro] || 'Período actual';
+        }
+
+        // Cargar datos desde la API
+        async function cargarDatos() {
+            /*
+                Funcion central del dashboard.
+
+                Responsabilidades:
+                1. Construir la URL de /api/estadisticas con todos los filtros activos.
+                2. Consultar la API.
+                3. Guardar la respuesta en datosGlobales.
+                4. Poblar el select de areas si aun no fue poblado.
+                5. Actualizar textos de fecha/periodo.
+                6. Redibujar metricas, graficos y tablas.
+
+                Contrato esperado de /api/estadisticas:
+                {
+                    estadisticas: [{ area, total }],
+                    detallePorDia: [{ fecha, visitas }],
+                    registros: [{ agremiado, cedula, area, fechaingreso, usuarioregistrador }],
+                    todasLasAreas: [{ idareas, nombrearea }],
+                    filtroActivo,
+                    fechaInicio,
+                    fechaFin,
+                    busquedaPersona,
+                    carnetBusqueda,
+                    cedulaBusqueda
+                }
+            */
+            try {
+                let url = `/api/estadisticas?filtro=${filtroActual}&offset=${periodoOffset}${areaActual ? '&area=' + encodeURIComponent(areaActual) : ''}`;
+                // Los filtros mensual/anual necesitan valores explicitos de selectores.
+                if (filtroActual === 'mensual') {
+                    url += `&mes=${document.getElementById('selectMes').value}&anio=${document.getElementById('selectAnioMensual').value}`;
+                } else if (filtroActual === 'anual') {
+                    url += `&anio=${document.getElementById('selectAnio').value}`;
+                }
+                /*
+                    Filtros por persona.
+                    El carnet se normaliza a seis digitos si contiene solo numeros y tiene longitud 1-6.
+                    Ejemplo: "123" -> "000123".
+                */
+                const carnetIngresado = document.getElementById('filtroCarnet').value.trim();
+                const carnet = /^\d{1,6}$/.test(carnetIngresado) ? carnetIngresado.padStart(6, '0') : carnetIngresado;
+                const cedula = document.getElementById('filtroCedula').value.trim();
+                if (carnet) url += `&carnet=${encodeURIComponent(carnet)}`;
+                if (cedula) url += `&cedula=${encodeURIComponent(cedula)}`;
+                const response = await fetch(url);
+                const datos = await response.json();
+                
+                // Guardar datos globales para que descargarPDF() use exactamente lo que esta en pantalla.
+                datosGlobales = datos;
+
+                // Llenar selector de áreas (solo la primera vez)
+                /*
+                    Llenar selector de areas solo la primera vez.
+                    La condicion options.length === 1 evita duplicar opciones cada vez que se recargan datos.
+                */
+                if (document.getElementById('selectArea').options.length === 1) {
+                    datos.todasLasAreas.forEach(area => {
+                        const option = document.createElement('option');
+                        option.value = area.idareas;
+                        option.textContent = area.nombrearea.toUpperCase();
+                        document.getElementById('selectArea').appendChild(option);
+                    });
+                }
+
+                // Actualizar fecha del reporte
+                /*
+                    Actualizar fecha del reporte.
+                    Esta fecha indica cuando se genero/actualizo la vista, no necesariamente la fecha de los datos.
+                */
+                const hoy = new Date();
+                document.getElementById('fechaReporte').textContent = hoy.toLocaleDateString('es-CR', { 
+                    year: 'numeric', 
+                    month: 'long', 
+                    day: 'numeric', 
+                    hour: '2-digit', 
+                    minute: '2-digit' 
+                });
+                /*
+                    Texto del rango aplicado.
+                    Si hay busqueda por persona, se muestra esa busqueda como criterio principal.
+                    Si no, se muestra el periodo calculado por el backend.
+                */
+                const rangoPeriodo = datos.busquedaPersona
+                    ? `Busqueda por persona${datos.carnetBusqueda ? ' | Carnet: ' + datos.carnetBusqueda : ''}${datos.cedulaBusqueda ? ' | Cedula: ' + datos.cedulaBusqueda : ''}`
+                    : `${getNombrePeriodo(filtroActual)}: ${datos.fechaInicio} - ${datos.fechaFin}`;
+                document.getElementById('periodoReporte').textContent = rangoPeriodo;
+                document.getElementById('rangoPeriodo').textContent = rangoPeriodo;
+
+                // Actualizar métricas
+                // Actualizar metricas superiores.
+                actualizarMetricas(datos);
+
+                // Actualizar gráficos
+                // Redibujar graficos Chart.js.
+                actualizarGraficos(datos);
+
+                // Actualizar tablas
+                // Regenerar HTML de las tres tablas.
+                actualizarTablas(datos);
+
+            } catch (error) {
+                /*
+                    Error de red o respuesta inesperada.
+                    Se deja un mensaje en la primera tabla porque es el lugar mas visible del reporte.
+                */
+                console.error('Error al cargar datos:', error);
+                document.getElementById('cuerpoTablaAreas').innerHTML = '<tr><td colspan="5">Error al cargar los datos</td></tr>';
+            }
+        }
+
+        // Actualizar métricas principales
+        function actualizarMetricas(datos) {
+            /*
+                Calcula los numeros grandes de resumen.
+
+                totalVisitas:
+                    Suma todos los totales por area.
+
+                areasActivas:
+                    Cantidad de areas con registros dentro del filtro actual.
+                    No necesariamente es la cantidad total de areas configuradas.
+
+                promedioDiario:
+                    Divide totalVisitas entre la cantidad de fechas devueltas por detallePorDia.
+                    Se redondea para mostrar un entero simple en la tarjeta.
+
+                areaMasVisitada:
+                    Toma la primera fila de estadisticas. El backend ordena por total descendente,
+                    por eso la primera fila representa el area principal.
+            */
+            const totalVisitas = datos.estadisticas.reduce((sum, row) => sum + parseInt(row.total), 0);
+            const areasActivas = datos.estadisticas.length;
+            const promedioDiario = datos.detallePorDia.length > 0 
+                ? Math.round(totalVisitas / datos.detallePorDia.length) 
+                : 0;
+            const areaMasVisitada = datos.estadisticas.length > 0 
+                ? datos.estadisticas[0].area.toUpperCase() 
+                : '-';
+
+            document.getElementById('totalVisitas').textContent = totalVisitas.toLocaleString();
+            document.getElementById('areasActivas').textContent = areasActivas;
+            document.getElementById('promedioDiario').textContent = promedioDiario;
+            document.getElementById('areaMasVisitada').textContent = areaMasVisitada;
+        }
+
+        // Actualizar gráficos con colores oscuros minimalistas
+        function actualizarGraficos(datos) {
+            /*
+                Dibuja los graficos visuales usando Chart.js.
+
+                Importante:
+                - Chart.js mantiene estado interno por canvas.
+                - Antes de crear un grafico nuevo se destruye la instancia anterior.
+                - Esto evita errores como "Canvas is already in use" y evita superponer datasets viejos.
+            */
+            const colores = ['#4f83a8', '#8b8f65', '#b08968', '#6b8f71', '#8a7ca8', '#b06f6f', '#5f8f8b', '#a18a5f'];
+            
+            // Gráfico de áreas
+            const ctxAreas = document.getElementById('graficoAreas').getContext('2d');
+            
+            if (chartsInstances.areas) {
+                chartsInstances.areas.destroy();
+            }
+
+            /*
+                Grafico 1: dona por area.
+                labels salen de datos.estadisticas[].area.
+                data sale de datos.estadisticas[].total.
+            */
+            chartsInstances.areas = new Chart(ctxAreas, {
+                type: 'doughnut',
+                data: {
+                    labels: datos.estadisticas.map(row => row.area.toUpperCase()),
+                    datasets: [{
+                        data: datos.estadisticas.map(row => row.total),
+                        backgroundColor: colores.slice(0, datos.estadisticas.length),
+                        borderWidth: 2,
+                        borderColor: '#1f2937'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                            labels: {
+                                color: '#cbd5e0',
+                                font: { size: 12 }
+                            }
+                        }
+                    }
+                }
+            });
+
+            // Gráfico de evolución
+            const ctxEvolucion = document.getElementById('graficoEvolucion').getContext('2d');
+            
+            if (chartsInstances.evolucion) {
+                chartsInstances.evolucion.destroy();
+            }
+
+            /*
+                Grafico 2: linea de evolucion.
+                Cada punto representa una fecha y el total de visitas de esa fecha.
+            */
+            chartsInstances.evolucion = new Chart(ctxEvolucion, {
+                type: 'line',
+                data: {
+                    labels: datos.detallePorDia.map(row => row.fecha),
+                    datasets: [{
+                        label: 'Visitas',
+                        data: datos.detallePorDia.map(row => row.visitas),
+                        borderColor: '#4f83a8',
+                        backgroundColor: 'rgba(79, 131, 168, 0.14)',
+                        borderWidth: 3,
+                        tension: 0.4,
+                        fill: true,
+                        pointRadius: 5,
+                        pointBackgroundColor: '#4f83a8',
+                        pointBorderColor: '#1f2937',
+                        pointBorderWidth: 2
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                            labels: {
+                                color: '#cbd5e0',
+                                font: { size: 12 }
+                            }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: {
+                                color: '#999'
+                            },
+                            grid: {
+                                color: 'rgba(200, 200, 200, 0.1)'
+                            }
+                        },
+                        x: {
+                            ticks: {
+                                color: '#999'
+                            },
+                            grid: {
+                                color: 'rgba(200, 200, 200, 0.1)'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Actualizar tablas
+        function actualizarTablas(datos) {
+            /*
+                Llena las tablas del reporte con HTML generado desde la respuesta de /api/estadisticas.
+
+                Tablas que actualiza:
+                1. cuerpoTablaAreas:
+                   Resumen agrupado por area, con porcentaje sobre el total.
+                2. cuerpoTablaRegistros:
+                   Registros individuales para auditoria.
+                3. cuerpoTablaDiaria:
+                   Serie diaria usada tambien por el grafico de evolucion.
+
+                Nota tecnica:
+                Aqui se usa innerHTML porque el contenido viene estructurado como filas completas.
+                Si en algun momento los datos pueden contener HTML no confiable, conviene escapar
+                valores antes de insertarlos, como se hace en construirReportePDF().
+            */
+            // Tabla de areas: calcula porcentaje de cada area respecto al total filtrado.
+            const totalVisitas = datos.estadisticas.reduce((sum, row) => sum + parseInt(row.total), 0);
+            let html = '';
+
+            if (datos.estadisticas.length === 0) {
+                html = '<tr><td colspan="5" style="text-align: center; padding: 20px;">Sin datos disponibles para este período</td></tr>';
+            } else {
+                datos.estadisticas.forEach((row, index) => {
+                    const porcentaje = totalVisitas > 0 ? ((row.total / totalVisitas) * 100).toFixed(1) : 0;
+                    html += `
+                        <tr>
+                            <td>${index + 1}</td>
+                            <td><span class="badge badge-area">${row.area.toUpperCase()}</span></td>
+                            <td><strong>${row.total}</strong></td>
+                            <td>${porcentaje}%</td>
+                            <td>${datos.filtroActivo.toUpperCase()}</td>
+                        </tr>
+                    `;
+                });
+            }
+
+            document.getElementById('cuerpoTablaAreas').innerHTML = html;
+
+            // Tabla de registros individuales: una fila por cada visita registrada.
+            if (datos.registros && datos.registros.length > 0) {
+                let htmlRegistros = '';
+                datos.registros.forEach((reg, index) => {
+                    htmlRegistros += `
+                        <tr>
+                            <td>${index + 1}</td>
+                            <td>${reg.agremiado || '-'}</td>
+                            <td>${reg.cedula || '-'}</td>
+                            <td><span class="badge badge-area">${reg.area.toUpperCase()}</span></td>
+                            <td>${reg.fechaingreso || '-'}</td>
+                            <td>${reg.usuarioregistrador || '-'}</td>
+                        </tr>
+                    `;
+                });
+                document.getElementById('cuerpoTablaRegistros').innerHTML = htmlRegistros;
+            } else {
+                document.getElementById('cuerpoTablaRegistros').innerHTML = '<tr><td colspan="6" style="text-align: center; padding: 20px;">Sin registros disponibles</td></tr>';
+            }
+
+            // Tabla de evolucion diaria: una fila por fecha.
+            let htmlDiaria = '';
+            if (datos.detallePorDia.length === 0) {
+                htmlDiaria = '<tr><td colspan="3" style="text-align: center; padding: 20px;">Sin datos disponibles</td></tr>';
+            } else {
+                datos.detallePorDia.forEach((row, index) => {
+                    htmlDiaria += `
+                        <tr>
+                            <td>${index + 1}</td>
+                            <td>${row.fecha}</td>
+                            <td><strong>${row.visitas}</strong></td>
+                        </tr>
+                    `;
+                });
+            }
+
+            document.getElementById('cuerpoTablaDiaria').innerHTML = htmlDiaria;
+        }
+
+        function escaparHtml(valor) {
+            /*
+                Escapa caracteres especiales antes de insertar valores dentro del HTML del PDF.
+
+                Se usa especialmente en construirReportePDF(), porque ahi se arma un string HTML completo.
+                Esto evita que un valor como "<script>" se interprete como etiqueta.
+            */
+            return String(valor ?? '').replace(/[&<>"']/g, caracter => ({
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#39;'
+            }[caracter]));
+        }
+
+        async function crearImagenGraficoPDF(tipo, datos) {
+            /*
+                Crea una imagen PNG de un grafico para insertarla dentro del PDF.
+
+                Por que no se usa directamente el canvas visible:
+                - El PDF necesita imagenes con tamano fijo y fondo claro.
+                - Los graficos visibles estan pensados para tema oscuro y responsive.
+                - Este canvas temporal permite crear una version limpia para impresion.
+
+                tipo:
+                - "areas": genera una dona con estadisticas por area.
+                - cualquier otro valor: genera la linea de evolucion diaria.
+            */
+            const canvas = document.createElement('canvas');
+            canvas.width = 1400;
+            canvas.height = 780;
+            canvas.style.position = 'fixed';
+            canvas.style.left = '-9999px';
+            document.body.appendChild(canvas);
+
+            const coloresPdf = ['#2563eb', '#dc2626', '#16a34a', '#f59e0b', '#7c3aed', '#0891b2', '#db2777', '#65a30d'];
+            const config = tipo === 'areas'
+                ? {
+                    type: 'doughnut',
+                    data: {
+                        labels: datos.estadisticas.map(row => String(row.area || '').toUpperCase()),
+                        datasets: [{ data: datos.estadisticas.map(row => Number(row.total || 0)), backgroundColor: coloresPdf, borderColor: '#ffffff', borderWidth: 6 }]
+                    },
+                    options: { responsive: false, animation: false, plugins: { legend: { position: 'right', labels: { color: '#111827', font: { size: 28 } } } } }
+                }
+                : {
+                    type: 'line',
+                    data: {
+                        labels: datos.detallePorDia.map(row => row.fecha),
+                        datasets: [{
+                            label: 'Visitas',
+                            data: datos.detallePorDia.map(row => Number(row.visitas || 0)),
+                            borderColor: '#2563eb',
+                            backgroundColor: 'rgba(37, 99, 235, 0.16)',
+                            borderWidth: 6,
+                            pointRadius: 7,
+                            pointBackgroundColor: '#dc2626',
+                            pointBorderColor: '#ffffff',
+                            pointBorderWidth: 3,
+                            tension: 0.35,
+                            fill: true
+                        }]
+                    },
+                    options: {
+                        responsive: false,
+                        animation: false,
+                        plugins: { legend: { labels: { color: '#111827', font: { size: 26 } } } },
+                        scales: {
+                            x: { ticks: { color: '#374151', font: { size: 22 } }, grid: { color: '#e5e7eb' } },
+                            y: { beginAtZero: true, ticks: { color: '#374151', font: { size: 22 } }, grid: { color: '#e5e7eb' } }
+                        }
+                    }
+                };
+
+            /*
+                Se crea el grafico fuera de pantalla, se espera un frame para que Chart.js dibuje,
+                luego se convierte a dataURL y se destruye para liberar memoria.
+            */
+            const chart = new Chart(canvas.getContext('2d'), config);
+            await new Promise(resolve => requestAnimationFrame(resolve));
+            const imagen = canvas.toDataURL('image/png', 1);
+            chart.destroy();
+            canvas.remove();
+            return imagen;
+        }
+
+        function partirFilasPDF(filas, filasPorPagina) {
+            /*
+                Divide tablas largas en bloques de tamano fijo.
+
+                html2pdf puede cortar contenido largo de forma incomoda si una tabla completa
+                excede la pagina. Al partir filas, cada bloque se vuelve una pagina controlada.
+            */
+            const bloques = [];
+            for (let i = 0; i < filas.length; i += filasPorPagina) {
+                bloques.push(filas.slice(i, i + filasPorPagina));
+            }
+            return bloques.length ? bloques : [[]];
+        }
+
+        function construirTablaPDF(titulo, columnasHtml, colgroupHtml, filas, columnas, filasPorPagina) {
+            /*
+                Arma una o varias paginas de tabla para el PDF.
+
+                Parametros:
+                - titulo: encabezado visible de la seccion.
+                - columnasHtml: fila <tr> del encabezado.
+                - colgroupHtml: anchos de columnas para mantener el PDF ordenado.
+                - filas: arreglo de strings <tr> ya construidos.
+                - columnas: cantidad de columnas, usada para colspan del estado vacio.
+                - filasPorPagina: limite de filas por pagina.
+            */
+            const bloques = partirFilasPDF(filas, filasPorPagina);
+            return bloques.map((bloque, index) => `
+                <div class="pdf-page">
+                    <h2 class="pdf-section-title">${titulo}${bloques.length > 1 ? ` - Parte ${index + 1} de ${bloques.length}` : ''}</h2>
+                    <table class="pdf-table">
+                        <colgroup>${colgroupHtml}</colgroup>
+                        <thead>${columnasHtml}</thead>
+                        <tbody>${bloque.length ? bloque.join('') : `<tr><td colspan="${columnas}" class="empty">Sin datos disponibles</td></tr>`}</tbody>
+                    </table>
+                </div>
+            `).join('');
+        }
+
+        function construirReportePDF(datos, graficoAreas, graficoEvolucion) {
+            /*
+                Construye todo el HTML temporal del PDF.
+
+                Este HTML no se muestra como parte normal de la pagina. descargarPDF() lo inserta
+                en un contenedor temporal, html2pdf lo convierte a archivo y luego el contenedor se borra.
+
+                Estructura del PDF:
+                1. Portada/resumen con logo, usuario, fecha, periodo y tarjetas resumen.
+                2. Imagen del grafico de areas.
+                3. Imagen del grafico de evolucion.
+                4. Tabla de areas.
+                5. Tabla de evolucion diaria.
+                6. Tabla de registros completos.
+            */
+            const estadisticas = datos.estadisticas || [];
+            const detallePorDia = datos.detallePorDia || [];
+            const registros = datos.registros || [];
+            const totalVisitas = estadisticas.reduce((sum, row) => sum + Number(row.total || 0), 0);
+            const fechaReporte = escaparHtml(document.getElementById('fechaReporte').textContent);
+            const periodoReporte = escaparHtml(document.getElementById('periodoReporte').textContent);
+            const generadoPor = `${escaparHtml('<%= nombre %>')} (${escaparHtml('<%= username %>')})`;
+
+            /*
+                Filas de la tabla por area.
+                Se recalcula el porcentaje aqui para que el PDF no dependa del HTML visible de la tabla.
+            */
+            const filasAreas = estadisticas.map((row, index) => {
+                const total = Number(row.total || 0);
+                const porcentaje = totalVisitas > 0 ? ((total / totalVisitas) * 100).toFixed(1) : '0.0';
+                return `<tr><td class="num">${index + 1}</td><td>${escaparHtml(String(row.area || '').toUpperCase())}</td><td class="num">${total}</td><td class="num">${porcentaje}%</td><td>${periodoReporte}</td></tr>`;
+            });
+
+            // Filas de evolucion diaria: datos que respaldan el grafico de linea.
+            const filasDiarias = detallePorDia.map((row, index) => `
+                <tr><td class="num">${index + 1}</td><td>${escaparHtml(row.fecha || '-')}</td><td class="num">${Number(row.visitas || 0)}</td></tr>
+            `);
+
+            // Filas de registros completos: se escapan todos los textos porque vienen de datos de BD/API.
+            const filasRegistros = registros.map((reg, index) => `
+                <tr><td class="num">${index + 1}</td><td>${escaparHtml(reg.agremiado || '-')}</td><td>${escaparHtml(reg.cedula || '-')}</td><td>${escaparHtml(String(reg.area || '-').toUpperCase())}</td><td>${escaparHtml(reg.fechaingreso || '-')}</td><td>${escaparHtml(reg.usuarioregistrador || '-')}</td></tr>
+            `);
+
+            /*
+                Cada tabla define su propio colgroup para controlar anchos en PDF.
+                Los valores de filasPorPagina se ajustan para que el contenido no quede cortado.
+            */
+            const tablaAreas = construirTablaPDF(
+                'Datos de la gráfica: Visitas por Área',
+                '<tr><th>#</th><th>Área</th><th>Total</th><th>%</th><th>Período</th></tr>',
+                '<col style="width: 7%"><col style="width: 43%"><col style="width: 14%"><col style="width: 12%"><col style="width: 24%">',
+                filasAreas,
+                5,
+                28
+            );
+
+            const tablaDiaria = construirTablaPDF(
+                'Datos de la gráfica: Evolución Diaria',
+                '<tr><th>#</th><th>Fecha</th><th>Visitas</th></tr>',
+                '<col style="width: 10%"><col style="width: 58%"><col style="width: 32%">',
+                filasDiarias,
+                3,
+                32
+            );
+
+            const tablaRegistros = construirTablaPDF(
+                'Registros completos',
+                '<tr><th>#</th><th>Carnet</th><th>Cédula</th><th>Área</th><th>Fecha</th><th>Usuario</th></tr>',
+                '<col style="width: 6%"><col style="width: 14%"><col style="width: 15%"><col style="width: 22%"><col style="width: 17%"><col style="width: 26%">',
+                filasRegistros,
+                6,
+                24
+            );
+
+            /*
+                El string de retorno incluye estilos propios del PDF.
+                Estan aqui, no en el CSS principal, porque este HTML vive solo mientras se genera el archivo.
+            */
+            return `
+                <section class="pdf-report">
+                    <style>
+                        .pdf-report {
+                            width: 816px;
+                            background: #ffffff;
+                            color: #111827;
+                            font-family: Arial, Helvetica, sans-serif;
+                            line-height: 1.25;
+                        }
+
+                        .pdf-page {
+                            width: 816px;
+                            min-height: 1056px;
+                            padding: 34px 38px;
+                            background: #ffffff;
+                            page-break-after: always;
+                            break-after: page;
+                        }
+
+                        .pdf-page:last-child {
+                            page-break-after: auto;
+                            break-after: auto;
+                        }
+
+                        .pdf-header {
+                            display: grid;
+                            grid-template-columns: 58px 1fr;
+                            gap: 14px;
+                            align-items: center;
+                            border-bottom: 2px solid #111827;
+                            padding-bottom: 12px;
+                            margin-bottom: 14px;
+                        }
+
+                        .pdf-logo {
+                            width: 58px;
+                            height: 58px;
+                            object-fit: contain;
+                            display: block;
+                        }
+
+                        .pdf-header h1 {
+                            margin: 0 0 5px 0;
+                            font-size: 22px;
+                            color: #111827;
+                            font-weight: 700;
+                        }
+
+                        .pdf-meta {
+                            color: #4b5563;
+                            font-size: 10px;
+                            line-height: 1.35;
+                        }
+
+                        .pdf-summary {
+                            display: grid;
+                            grid-template-columns: repeat(4, 1fr);
+                            border: 1px solid #d1d5db;
+                            margin: 12px 0 14px;
+                        }
+
+                        .pdf-summary-item {
+                            padding: 9px 8px;
+                            border-right: 1px solid #d1d5db;
+                            text-align: center;
+                            min-height: 50px;
+                        }
+
+                        .pdf-summary-item:last-child {
+                            border-right: none;
+                        }
+
+                        .pdf-summary-label {
+                            display: block;
+                            color: #6b7280;
+                            font-size: 8px;
+                            text-transform: uppercase;
+                            font-weight: 700;
+                            margin-bottom: 4px;
+                        }
+
+                        .pdf-summary-value {
+                            display: block;
+                            color: #111827;
+                            font-size: 14px;
+                            font-weight: 700;
+                            overflow-wrap: anywhere;
+                        }
+
+                        .pdf-chart {
+                            border: 1px solid #d1d5db;
+                            padding: 10px;
+                            margin-top: 10px;
+                            page-break-inside: avoid;
+                            break-inside: avoid;
+                        }
+
+                        .pdf-chart h2,
+                        .pdf-section-title {
+                            margin: 0 0 8px;
+                            font-size: 15px;
+                            color: #111827;
+                            font-weight: 700;
+                            border-bottom: 1px solid #d1d5db;
+                            padding-bottom: 5px;
+                        }
+
+                        .pdf-chart img {
+                            width: 100%;
+                            height: 310px;
+                            object-fit: contain;
+                            display: block;
+                        }
+
+                        .pdf-table {
+                            width: 100%;
+                            table-layout: fixed;
+                            border-collapse: collapse;
+                            font-size: 8.5px;
+                        }
+
+                        .pdf-table th {
+                            background: #374151;
+                            color: #ffffff;
+                            border: 1px solid #374151;
+                            padding: 6px 5px;
+                            text-align: left;
+                            font-weight: 700;
+                        }
+
+                        .pdf-table td {
+                            border: 1px solid #e5e7eb;
+                            padding: 5px 5px;
+                            color: #1f2937;
+                            overflow-wrap: anywhere;
+                            word-break: break-word;
+                            vertical-align: top;
+                        }
+
+                        .pdf-table tr:nth-child(even) td {
+                            background: #f9fafb;
+                        }
+
+                        .pdf-table .num {
+                            text-align: center;
+                            white-space: nowrap;
+                        }
+
+                        .empty {
+                            text-align: center;
+                            color: #6b7280;
+                            padding: 18px;
+                        }
+
+                        .pdf-footer {
+                            margin-top: 12px;
+                            padding-top: 8px;
+                            border-top: 1px solid #d1d5db;
+                            color: #6b7280;
+                            font-size: 8px;
+                            text-align: center;
+                        }
+                    </style>
+
+                    <div class="pdf-page">
+                        <div class="pdf-header">
+                            <img class="pdf-logo" src="/imagenes/logo_caab.png" alt="Logo">
+                            <div>
+                                <h1>Reporte de Estadísticas</h1>
+                                <div class="pdf-meta">
+                                    Generado por ${generadoPor}<br>
+                                    Fecha: ${fechaReporte}<br>
+                                    Período: ${periodoReporte}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="pdf-summary">
+                            <div class="pdf-summary-item">
+                                <span class="pdf-summary-label">Total Visitas</span>
+                                <span class="pdf-summary-value">${escaparHtml(document.getElementById('totalVisitas').textContent)}</span>
+                            </div>
+                            <div class="pdf-summary-item">
+                                <span class="pdf-summary-label">Áreas Activas</span>
+                                <span class="pdf-summary-value">${escaparHtml(document.getElementById('areasActivas').textContent)}</span>
+                            </div>
+                            <div class="pdf-summary-item">
+                                <span class="pdf-summary-label">Promedio Diario</span>
+                                <span class="pdf-summary-value">${escaparHtml(document.getElementById('promedioDiario').textContent)}</span>
+                            </div>
+                            <div class="pdf-summary-item">
+                                <span class="pdf-summary-label">Área Top</span>
+                                <span class="pdf-summary-value">${escaparHtml(document.getElementById('areaMasVisitada').textContent)}</span>
+                            </div>
+                        </div>
+
+                        <div class="pdf-chart">
+                            <h2>Gráfica 1: Visitas por Área</h2>
+                            <img src="${graficoAreas}" alt="Visitas por Área">
+                        </div>
+
+                        <div class="pdf-chart">
+                            <h2>Gráfica 2: Evolución de Visitas</h2>
+                            <img src="${graficoEvolucion}" alt="Evolución de visitas">
+                        </div>
+                    </div>
+
+                    ${tablaAreas}
+                    ${tablaDiaria}
+                    ${tablaRegistros}
+                </section>
+            `;
+        }
+
+        function esperarImagenesPDF(elemento) {
+            /*
+                Espera a que todas las imagenes internas del reporte esten listas.
+
+                html2pdf captura el DOM como imagen. Si una imagen aun no termino de cargar,
+                podria salir en blanco dentro del PDF. Por eso se resuelve una promesa por imagen.
+            */
+            const imagenes = Array.from(elemento.querySelectorAll('img'));
+            return Promise.all(imagenes.map(img => {
+                if (img.complete && img.naturalWidth > 0) return Promise.resolve();
+                return new Promise((resolve, reject) => {
+                    img.onload = resolve;
+                    img.onerror = reject;
+                });
+            }));
+        }
+
+        // Descargar Excel
+        function descargarExcel() {
+            /*
+                Descarga Excel desde el backend.
+
+                A diferencia del PDF, Excel no se genera en el navegador.
+                Esta funcion construye una URL con los mismos filtros visibles y redirige a:
+                /api/exportar-excel
+
+                El backend crea el .xlsx y responde como attachment para descargar.
+            */
+            const area = document.getElementById('selectArea').value;
+            const mes = document.getElementById('selectMes')?.value || '';
+            const anio = document.getElementById('selectAnioMensual')?.value || '';
+            const carnet = document.getElementById('filtroCarnet')?.value || '';
+            const cedula = document.getElementById('filtroCedula')?.value || '';
+            
+            let url = `/api/exportar-excel?filtro=${filtroActual}`;
+            /*
+                Solo se agregan parametros si tienen valor.
+                encodeURIComponent protege valores con espacios u otros caracteres especiales.
+            */
+            if (area) url += `&area=${encodeURIComponent(area)}`;
+            if (mes) url += `&mes=${mes}`;
+            if (anio) url += `&anio=${anio}`;
+            if (carnet) url += `&carnet=${encodeURIComponent(carnet)}`;
+            if (cedula) url += `&cedula=${encodeURIComponent(cedula)}`;
+            
+            window.location.href = url;
+        }
+
+        // Descargar PDF
+        async function descargarPDF() {
+            /*
+                Genera y descarga un PDF con los mismos datos que se ven en pantalla.
+
+                Flujo:
+                1. Crea imagenes limpias de los dos graficos.
+                2. Construye un HTML completo de reporte con construirReportePDF().
+                3. Inserta ese HTML en un contenedor temporal fuera del flujo normal.
+                4. Espera imagenes y un frame de render.
+                5. Convierte el HTML a PDF con html2pdf().
+                6. Elimina el contenedor temporal aunque ocurra error.
+            */
+            const graficoAreas = await crearImagenGraficoPDF('areas', datosGlobales);
+            const graficoEvolucion = await crearImagenGraficoPDF('evolucion', datosGlobales);
+            const host = document.createElement('div');
+            host.innerHTML = construirReportePDF(datosGlobales, graficoAreas, graficoEvolucion);
+            host.style.position = 'fixed';
+            host.style.left = '0';
+            host.style.top = '0';
+            host.style.width = '816px';
+            host.style.background = '#ffffff';
+            host.style.zIndex = '99999';
+            host.style.pointerEvents = 'none';
+            document.body.appendChild(host);
+
+            const element = host.querySelector('.pdf-report');
+            // Asegura que el logo y graficos temporales esten disponibles antes de capturar el DOM.
+            await esperarImagenesPDF(element);
+            await new Promise(resolve => requestAnimationFrame(resolve));
+
+            /*
+                Opciones de html2pdf:
+                - margin 0 porque el HTML interno ya trae padding por pagina.
+                - scale 2 mejora nitidez.
+                - useCORS permite cargar imagenes locales/servidas si el navegador lo permite.
+                - format letter coincide con tamano carta.
+            */
+            const opt = {
+                margin: [0, 0, 0, 0],
+                filename: `reporte-estadisticas-${new Date().toISOString().split('T')[0]}.pdf`,
+                image: { type: 'jpeg', quality: 1 },
+                html2canvas: {
+                    scale: 2,
+                    backgroundColor: '#ffffff',
+                    useCORS: true,
+                    windowWidth: 816,
+                    scrollX: 0,
+                    scrollY: 0
+                },
+                pagebreak: { mode: ['css', 'legacy'], avoid: ['.pdf-header', '.pdf-summary', '.pdf-chart'] },
+                jsPDF: { orientation: 'portrait', unit: 'mm', format: 'letter' }
+            };
+
+            try {
+                await html2pdf().set(opt).from(element).save();
+            } finally {
+                host.remove();
+            }
+        }
+
+        /*
+            Inicializacion del dashboard al cargar la pagina.
+
+            Orden:
+            1. llenarSelectoresFecha(): prepara mes/ano disponibles.
+            2. actualizarControlesPeriodo(): sincroniza botones/selectores con filtroActual inicial.
+            3. cargarDatos(): consulta la API y reemplaza los estados "Cargando datos...".
+        */
+        llenarSelectoresFecha();
+        actualizarControlesPeriodo();
+        cargarDatos();
+    </script>
+<%- include('partials/footer') %>

@@ -1,0 +1,128 @@
+<%- include('partials/header') %>
+
+<!--
+    CRUD de usuarios.
+    Esta pantalla solo debe ser renderizada para administradores desde index.js.
+    Permite crear usuarios, editar datos basicos, cambiar clave y eliminar accesos.
+-->
+<main class="w-full px-4 py-8 user-crud-page">
+    <div class="max-w-6xl mx-auto w-full">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+            <div>
+                <h1 class="text-3xl font-bold card-title">CRUD usuarios</h1>
+                <p class="card-label mt-1">Administre los accesos del sistema.</p>
+            </div>
+            <a href="/admin" class="inline-flex justify-center text-white py-2 px-4 rounded transition user-crud-back" style="background-color: #1b263d;">Volver</a>
+        </div>
+
+        <!--
+            Formulario de alta:
+            - Envia usuario, nombre, clave y rol a POST /admin/usuarios.
+            - La clave se cifra en el backend antes de guardarse en la tabla login.
+        -->
+        <section class="card rounded-lg shadow-sm p-5 mb-8 user-crud-create">
+            <h2 class="text-xl font-bold card-title mb-4">Crear usuario</h2>
+            <form action="/admin/usuarios" method="post" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-[1fr_1fr_1fr_1fr_auto] gap-4 items-end">
+                <div>
+                    <label for="usuario" class="block card-label font-semibold mb-2">Usuario</label>
+                    <input type="text" id="usuario" name="usuario" required maxlength="99" class="rounded px-3 py-2 w-full">
+                </div>
+                <div>
+                    <label for="nombre" class="block card-label font-semibold mb-2">Nombre</label>
+                    <input type="text" id="nombre" name="nombre" required maxlength="99" class="rounded px-3 py-2 w-full">
+                </div>
+                <div>
+                    <label for="clave" class="block card-label font-semibold mb-2">Clave</label>
+                    <input type="password" id="clave" name="clave" required maxlength="99" class="rounded px-3 py-2 w-full">
+                </div>
+                <div>
+                    <label for="rol" class="block card-label font-semibold mb-2">Rol</label>
+                    <!-- Los valores user/mod/admin coinciden con los roles usados por las rutas del sistema. -->
+                    <select id="rol" name="rol" required class="rounded px-3 py-2 w-full">
+                        <option value="user">Usuario</option>
+                        <option value="mod">Moderador</option>
+                        <option value="admin">Administrador</option>
+                    </select>
+                </div>
+                <button type="submit" class="text-white py-2 px-4 rounded transition font-semibold user-crud-submit" style="background-color: #C31B28;">Crear</button>
+            </form>
+        </section>
+
+        <!--
+            Lista de usuarios existentes.
+            Cada fila muestra los datos actuales y permite editarlos sin salir de la tabla.
+        -->
+        <section class="card rounded-lg shadow-sm overflow-hidden user-crud-list">
+            <div class="p-5" style="border-bottom: 1px solid var(--card-border);">
+                <h2 class="text-xl font-bold card-title">Usuarios existentes</h2>
+            </div>
+            <div class="user-crud-table-wrap">
+                <table class="min-w-full text-sm user-crud-table">
+                    <thead>
+                        <tr>
+                            <th class="text-left px-4 py-3">Usuario</th>
+                            <th class="text-left px-4 py-3">Nombre</th>
+                            <th class="text-left px-4 py-3">Rol</th>
+                            <th class="text-left px-4 py-3">Ultimo login</th>
+                            <th class="text-left px-4 py-3">Nueva clave</th>
+                            <th class="text-right px-4 py-3">Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-200">
+                        <!-- Estado vacio: se muestra si el backend no envia usuarios o la lista viene vacia. -->
+                        <% if (!usuarios || usuarios.length === 0) { %>
+                            <tr>
+                                <td colspan="6" class="px-4 py-6 text-center card-label">No hay usuarios registrados.</td>
+                            </tr>
+                        <% } %>
+
+                        <!--
+                            Se genera una fila por cada usuario recibido desde la consulta SELECT.
+                            El iduser se usa para construir las rutas de editar/eliminar.
+                        -->
+                        <% usuarios.forEach(usuario => { %>
+                            <tr>
+                                <td class="px-4 py-3" data-label="Usuario">
+                                    <!--
+                                        El atributo form conecta este input con el form de edicion de la misma fila,
+                                        aunque el input no este dentro de la etiqueta <form>.
+                                    -->
+                                    <input form="form-editar-<%= usuario.iduser %>" type="text" name="usuario" value="<%= usuario.usuario %>" required maxlength="99" class="rounded px-3 py-2 user-crud-input user-crud-input-sm">
+                                </td>
+                                <td class="px-4 py-3" data-label="Nombre">
+                                    <input form="form-editar-<%= usuario.iduser %>" type="text" name="nombre" value="<%= usuario.nombre %>" required maxlength="99" class="rounded px-3 py-2 user-crud-input user-crud-input-lg">
+                                </td>
+                                <td class="px-4 py-3" data-label="Rol">
+                                    <!-- Mantiene seleccionado el rol actual comparando el valor guardado en DB. -->
+                                    <select form="form-editar-<%= usuario.iduser %>" name="rol" required class="rounded px-3 py-2 user-crud-input user-crud-input-role">
+                                        <option value="user" <%= usuario.rol === 'user' ? 'selected' : '' %>>Usuario</option>
+                                        <option value="mod" <%= usuario.rol === 'mod' ? 'selected' : '' %>>Moderador</option>
+                                        <option value="admin" <%= usuario.rol === 'admin' ? 'selected' : '' %>>Administrador</option>
+                                    </select>
+                                </td>
+                                <td class="px-4 py-3 card-label whitespace-nowrap" data-label="Ultimo login"><%= usuario.ultimologin || '-' %></td>
+                                <td class="px-4 py-3" data-label="Nueva clave">
+                                    <!-- Si se deja vacio, el backend conserva la clave actual. -->
+                                    <input form="form-editar-<%= usuario.iduser %>" type="password" name="clave" maxlength="99" placeholder="Sin cambios" class="rounded px-3 py-2 user-crud-input user-crud-input-sm">
+                                </td>
+                                <td class="px-4 py-3" data-label="Acciones">
+                                    <div class="flex justify-end gap-2 user-crud-actions">
+                                        <!-- Formulario de edicion vacio: recibe los campos enlazados por atributo form. -->
+                                        <form id="form-editar-<%= usuario.iduser %>" class="user-crud-edit-form" action="/admin/usuarios/<%= usuario.iduser %>/editar" method="post"></form>
+                                        <button form="form-editar-<%= usuario.iduser %>" type="submit" class="text-white py-2 px-3 rounded transition font-semibold user-crud-action" style="background-color: #047857;">Guardar</button>
+                                        <!-- Eliminar usa un formulario separado porque apunta a otra ruta POST. -->
+                                        <form action="/admin/usuarios/<%= usuario.iduser %>/eliminar" method="post" onsubmit="return confirm('Desea eliminar este usuario?');">
+                                            <button type="submit" class="text-white py-2 px-3 rounded transition font-semibold user-crud-action" style="background-color: #C31B28;">Eliminar</button>
+                                        </form>
+                                    </div>
+                                </td>
+                            </tr>
+                        <% }) %>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </div>
+</main>
+
+<%- include('partials/footer') %>

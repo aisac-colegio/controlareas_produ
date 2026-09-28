@@ -1,0 +1,77 @@
+<%- include('partials/header') %>
+<!-- Pantalla de login. Valida usuario y contrasena para crear la sesion. -->
+<main class="login-page">
+    <!-- Tarjeta central donde la persona escribe sus credenciales. -->
+    <div class="card login-card rounded-lg shadow-md w-full">
+        <h1 class="card-title login-title font-bold text-center">Bienvenido</h1>
+
+        <!-- El formulario envia usuario y contrasena al servidor por la ruta /login. -->
+        <form action="/login" method="post" class="login-form">
+            <!-- Campo de usuario: identifica la cuenta que intenta entrar. -->
+            <div class="login-field">
+                <label for="username" class="card-label login-label block text-left font-bold">Usuario:</label>
+                <input type="text" id="username" name="username" required class="login-input w-full border rounded focus:outline-none focus:ring-2 focus:ring-green-500" autocomplete="username">
+            </div>
+
+            <!-- Campo de contrasena: se compara en el servidor contra la clave cifrada. -->
+            <div class="login-field">
+                <label for="password" class="card-label login-label block text-left font-bold">Contrasena:</label>
+                <div class="relative">
+                    <input type="password" id="password" name="password" required class="login-input login-password font-bold w-full border rounded focus:outline-none focus:ring-2 focus:ring-green-500" autocomplete="current-password">
+
+                    <!-- Icono de ojo: permite ver u ocultar la contrasena mientras se escribe. -->
+                    <span class="login-password-toggle absolute inset-y-0 right-0 flex items-center text-sm leading-5">
+                        <i class="far fa-eye cursor-pointer" id="togglePassword"></i>
+                    </span>
+                </div>
+            </div>
+
+            <!-- Boton que envia el formulario al backend. -->
+            <button type="submit" class="login-submit w-full bg-black text-white rounded hover:bg-gray-900 focus:outline-none transition">Iniciar Sesion</button>
+        </form>
+
+        <!-- Enlace para regresar a la portada publica. -->
+        <a href="/" class="link-volver login-back block text-center hover:underline">Volver</a>
+    </div>
+
+    <% if (loginError) { %>
+        <!-- Si el backend rechaza el login, se muestra este aviso en pantalla. -->
+        <div id="loginErrorPopup" class="login-error-overlay fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-60">
+            <div class="login-error-card bg-white text-gray-900 rounded-lg shadow-2xl w-full text-center">
+                <h2 class="login-error-title font-bold">Login fallido</h2>
+                <p class="login-error-message"><%= loginError %></p>
+
+                <!-- Cierra el aviso sin recargar la pagina. -->
+                <button type="button" id="cerrarLoginPopup" class="login-error-button bg-black text-white rounded hover:bg-gray-900 focus:outline-none transition">
+                    Aceptar
+                </button>
+            </div>
+        </div>
+    <% } %>
+</main>
+
+<script>
+    // Referencias a elementos visibles que JavaScript necesita controlar.
+    const togglePassword = document.getElementById('togglePassword');
+    const password = document.getElementById('password');
+    const loginErrorPopup = document.getElementById('loginErrorPopup');
+    const cerrarLoginPopup = document.getElementById('cerrarLoginPopup');
+
+    // Cambia la contrasena entre oculta y visible cuando se presiona el icono.
+    if (togglePassword && password) {
+        togglePassword.addEventListener('click', () => {
+            const type = password.getAttribute('type') === 'password' ? 'text' : 'password';
+            password.setAttribute('type', type);
+            togglePassword.classList.toggle('fa-eye');
+            togglePassword.classList.toggle('fa-eye-slash');
+        });
+    }
+
+    // Permite cerrar el mensaje de error despues de leerlo.
+    if (loginErrorPopup && cerrarLoginPopup) {
+        cerrarLoginPopup.addEventListener('click', () => {
+            loginErrorPopup.remove();
+        });
+    }
+</script>
+<%- include('partials/footer') %>

@@ -1,0 +1,20 @@
+<!--el header y el footer se toman de un archivo estático en la carpeta "partials", esto con el fin de no repetir el mismo código en cada página y que si hago un cambio no se tenga que ir archivo por archivo cambiando-->
+<%- include('partials/header') %>
+<!-- página publica inicial. Presenta el sistema y dirige al inicio de sesion. -->
+<main>
+    <!-- tarjeta central de bienvenida, visible antes de iniciar sesion. -->
+    <div class="card p-8 rounded-lg shadow-md w-full max-w-xl text-center">
+        <!-- logo institucional mostrado en la pantalla inicial. -->
+        <img src="/imagenes/logo_caab.png" alt="Logo CAAB" class="bg-white w-48 h-48 rounded-full items-center mx-auto mb-6">
+
+        <!-- texto descriptivo para indicar de que trata el sistema y quién lo desarrolló -->
+        <p class="card-label text-lg mb-8">Registro de Areas Deportivas para Agremiados</p>
+        <p class="card-label text-md mb-8">Producto Desarrollado por el Departamento de Tecnologia</p>
+
+        <!-- enlace que lleva a la página de login. -->
+        <div class="flex flex-col gap-4">
+            <a href="/login" class="bg-black border-2 border-black text-white py-3 px-6 rounded-lg hover:bg-gray-900 hover:text-white transition font-semibold">Iniciar Sesion</a>
+        </div>
+    </div>
+</main>
+<%- include('partials/footer') %>

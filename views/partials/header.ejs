@@ -1,0 +1,54 @@
+<!-- header que se pone en todas las páginas -->
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<!-- Tailwind da clases rapidas para ordenar, espaciar y colorear elementos. -->
+<link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+
+<!-- Font Awesome aporta iconos, como el ojo del login. -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+
+<!-- CSS propio del sistema: colores, tarjetas, tablas, responsive y tema oscuro. -->
+<link rel="stylesheet" href="/estilos.css">
+
+<!-- Barra superior con logo y cierre de sesion. -->
+<%
+    const rolHeader = typeof role !== 'undefined' ? String(role).toLowerCase() : '';
+    const inicioHeader = rolHeader === 'usuario' || rolHeader === 'user'
+        ? '/user'
+        : rolHeader === 'moderador' || rolHeader === 'mod'
+            ? '/mod'
+            : rolHeader === 'administrador' || rolHeader === 'admin'
+                ? '/admin'
+                : '/';
+%>
+<header id="main-header" class="site-header w-full transition-colors duration-300 border-b border-gray-800" style="background-color: #000000; color: #ffffff;">
+    <div class="site-header-inner w-full mx-auto px-4 py-3 flex justify-between items-center">
+        <!-- El logo funciona como enlace al panel principal segun el rol. -->
+        <div class="site-logo-wrap font-bold">
+            <a href="<%= inicioHeader %>" class="site-logo-link transition" aria-label="Ir al panel principal">
+                <img src="/imagenes/logo_caab.png" alt="Logo CAAB" class="site-logo object-cover rounded-full">
+            </a>
+        </div>
+
+        <!-- En computadoras se muestra directamente el boton de cerrar sesion. -->
+        <div class="hidden md:flex space-x-4 items-center text-center">
+            <a href="/logout" class="py-2 px-4 rounded transition hover:bg-red-600" style="background-color: #333333; color: #ffffff;" onmouseover="this.style.backgroundColor='#FF0000'" onmouseout="this.style.backgroundColor='#333333'">Cerrar Sesion</a>
+        </div>
+
+        <!-- En telefonos se muestra un boton de menu para ahorrar espacio. -->
+        <div class="md:hidden">
+            <button id="menu-button" type="button" class="focus:outline-none" style="color: #ffffff;" aria-label="Abrir menu">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16m-7 6h7"></path>
+                </svg>
+            </button>
+        </div>
+    </div>
+
+    <!-- Menu desplegable que aparece solo en pantallas pequenas. -->
+    <div id="mobile-menu" class="hidden md:hidden" style="background-color: #000000; color: #ffffff;">
+        <nav class="flex flex-col space-y-2 px-4 py-2">
+            <a href="/logout" class="py-2 px-4 rounded text-center block transition" style="background-color: #333333; color: #ffffff;" onmouseover="this.style.backgroundColor='#555555'" onmouseout="this.style.backgroundColor='#333333'">Cerrar Sesion</a>
+        </nav>
+    </div>
+</header>

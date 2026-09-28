@@ -1,0 +1,280 @@
+<%- include('partials/header') %>
+<!-- Registro de visitas. Busca un agremiado por carnet o cedula y guarda el area visitada. -->
+<%
+    // "areas" viene desde index.js al renderizar la vista.
+    // Se normaliza a arreglo para evitar errores si llega undefined o con otro tipo.
+    const listaAreas = Array.isArray(areas) ? areas : [];
+    const sinAreas = listaAreas.length === 0;
+%>
+<main class="flex flex-col items-center justify-center p-4">
+    <div class="w-full md:w-96 bg-white rounded-lg shadow-lg p-6">
+        <h2 class="text-2xl font-bold text-black text-center mb-6">Buscar Agremiado</h2>
+
+        <!--
+            Formulario de busqueda:
+            - Permite buscar por numero de carnet o por numero de cedula.
+            - La validacion del script impide que ambos campos se usen al mismo tiempo.
+        -->
+        <div class="mb-6">
+            <label for="carnet" class="block text-gray-700 font-semibold mb-2">Numero de Carnet:</label>
+            <input
+                type="text"
+                id="carnet"
+                placeholder="Ejemplo: 1234 o 001234"
+                inputmode="numeric"
+                maxlength="10"
+                class="border border-gray-300 rounded-lg px-4 py-2 w-full mb-3 focus:outline-none focus:ring-2 focus:ring-blue-600 disabled:bg-gray-100 disabled:text-gray-500"
+            >
+
+            <label for="cedulaBusqueda" class="block text-gray-700 font-semibold mb-2">Numero de Cedula:</label>
+            <input
+                type="text"
+                id="cedulaBusqueda"
+                placeholder="Ejemplo: 107380835"
+                inputmode="numeric"
+                class="border border-gray-300 rounded-lg px-4 py-2 w-full mb-3 focus:outline-none focus:ring-2 focus:ring-blue-600 disabled:bg-gray-100 disabled:text-gray-500"
+            >
+
+            <button
+                type="button"
+                id="btnBuscar"
+                class="w-full bg-blue-800 text-white py-2 px-4 rounded-lg hover:bg-blue-700 font-semibold transition"
+            >
+                Buscar
+            </button>
+        </div>
+
+        <!--
+            Resultado de busqueda devuelto por /api/buscar-agremiado.
+            El bloque inicia oculto y el script lo llena cuando la respuesta es exitosa.
+        -->
+        <div id="resultadoBusqueda" class="hidden mb-6 p-4 bg-blue-50 border border-blue-300 rounded-lg">
+            <div class="mb-3">
+                <label class="block text-gray-700 font-semibold mb-1">Nombre Completo:</label>
+                <p id="nombreCompleto" class="text-gray-800 text-lg font-semibold"></p>
+            </div>
+            <div class="mb-3">
+                <label class="block text-gray-700 font-semibold mb-1">Cedula:</label>
+                <p id="cedulaMostrada" class="text-gray-800"></p>
+            </div>
+            <div class="mb-3">
+                <label class="block text-gray-700 font-semibold mb-1">Numero de Carnet:</label>
+                <p id="carnetMostrado" class="text-gray-800"></p>
+            </div>
+        </div>
+
+        <!-- Mensaje especifico cuando el estado profesional no permite registrar la visita. -->
+        <div id="mensajeEstadoAgremiado" class="hidden mb-6 p-4 bg-red-50 border border-red-300 rounded-lg text-red-700 font-semibold"></div>
+
+        <!--
+            Formulario para guardar:
+            - Solo aparece si el agremiado esta activo.
+            - data-sin-areas permite que el JavaScript deshabilite el guardado cuando no hay areas.
+            - Los campos hidden se llenan con los datos confiables devueltos por la busqueda.
+        -->
+        <form id="formGuardar" class="hidden" action="/admin/ingresaragremiado" method="post" data-sin-areas="<%= sinAreas ? 'true' : 'false' %>">
+            <div class="mb-4">
+                <label for="area" class="block text-gray-700 font-semibold mb-2">Area que Visita:</label>
+                <select
+                    name="area"
+                    id="area"
+                    class="border border-gray-300 rounded-lg px-4 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-600"
+                    required
+                >
+                    <option value="">Seleccione un area</option>
+                    <% // Cada opcion usa el id del area como valor que recibira el POST. %>
+                    <% listaAreas.forEach(area => { %>
+                        <option value="<%= area.idareas %>"><%= area.nombrearea %></option>
+                    <% }) %>
+                </select>
+                <% if (sinAreas) { %>
+                    <p class="text-red-600 text-sm mt-2">No hay areas disponibles. Agregue una desde Gestionar Areas.</p>
+                <% } %>
+            </div>
+
+            <input
+                type="hidden"
+                name="agremiado"
+                id="agremiadoHidden"
+            >
+            <input
+                type="hidden"
+                name="nombreCompleto"
+                id="nombreCompletoHidden"
+            >
+            <input
+                type="hidden"
+                name="cedula"
+                id="cedulaHidden"
+            >
+
+            <button
+                type="submit"
+                id="btnGuardarRegistro"
+                class="w-full bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 font-semibold transition disabled:bg-gray-400 disabled:hover:bg-gray-400 disabled:cursor-not-allowed disabled:opacity-100"
+            >
+                Guardar Registro
+            </button>
+        </form>
+
+        <!-- Mensajes de error -->
+        <div id="mensajeError" class="hidden mt-4 p-4 bg-red-50 border border-red-300 rounded-lg text-red-700"></div>
+    </div>
+</main>
+
+<script>
+    // Referencias a los elementos principales de la vista.
+    const btnBuscar = document.getElementById('btnBuscar');
+    const inputCarnet = document.getElementById('carnet');
+    const inputCedulaBusqueda = document.getElementById('cedulaBusqueda');
+    const resultadoBusqueda = document.getElementById('resultadoBusqueda');
+    const formGuardar = document.getElementById('formGuardar');
+    const mensajeError = document.getElementById('mensajeError');
+    const mensajeEstadoAgremiado = document.getElementById('mensajeEstadoAgremiado');
+    const btnGuardarRegistro = document.getElementById('btnGuardarRegistro');
+
+    // Valor calculado en servidor segun si existen areas activas disponibles.
+    const sinAreas = formGuardar.dataset.sinAreas === 'true';
+    btnGuardarRegistro.disabled = sinAreas;
+
+    function mostrarError(mensaje) {
+        // Muestra errores de validacion o conexion y oculta resultados anteriores.
+        mensajeError.textContent = mensaje;
+        mensajeError.classList.remove('hidden');
+        mensajeEstadoAgremiado.classList.add('hidden');
+        resultadoBusqueda.classList.add('hidden');
+        formGuardar.classList.add('hidden');
+    }
+
+    function limpiarError() {
+        // Limpia tanto errores generales como mensajes de estado del agremiado.
+        mensajeError.classList.add('hidden');
+        mensajeError.textContent = '';
+        mensajeEstadoAgremiado.classList.add('hidden');
+        mensajeEstadoAgremiado.textContent = '';
+    }
+
+    function limpiarResultado() {
+        // Evita que se guarde una visita con datos de una busqueda anterior.
+        resultadoBusqueda.classList.add('hidden');
+        formGuardar.classList.add('hidden');
+        btnGuardarRegistro.disabled = true;
+        document.getElementById('agremiadoHidden').value = '';
+        document.getElementById('nombreCompletoHidden').value = '';
+        document.getElementById('cedulaHidden').value = '';
+    }
+
+    function actualizarCamposBusqueda() {
+        // Si el usuario escribe carnet se bloquea cedula, y viceversa.
+        const tieneCarnet = inputCarnet.value.trim() !== '';
+        const tieneCedula = inputCedulaBusqueda.value.trim() !== '';
+
+        inputCarnet.disabled = tieneCedula;
+        inputCedulaBusqueda.disabled = tieneCarnet;
+
+        if (!tieneCarnet && !tieneCedula) {
+            inputCarnet.disabled = false;
+            inputCedulaBusqueda.disabled = false;
+        }
+    }
+
+    btnBuscar.addEventListener('click', async () => {
+        // Consulta el backend, que a su vez consulta el servicio externo por carnet o cedula.
+        // El carnet se rellena a 6 digitos porque el servicio lo espera con ceros iniciales.
+        const carnetIngresado = inputCarnet.value.trim();
+        const cedulaIngresada = inputCedulaBusqueda.value.trim();
+        const carnet = carnetIngresado ? carnetIngresado.padStart(6, '0') : '';
+
+        if ((carnetIngresado && cedulaIngresada) || (!carnetIngresado && !cedulaIngresada)) {
+            mostrarError('Por favor ingrese un numero de carnet o un numero de cedula');
+            return;
+        }
+
+        if (carnetIngresado && !/^\d{1,10}$/.test(carnetIngresado)) {
+            mostrarError('El carnet debe contener solo numeros y maximo 10 digitos');
+            return;
+        }
+
+        if (cedulaIngresada && !/^\d+$/.test(cedulaIngresada)) {
+            mostrarError('La cedula debe contener solo numeros');
+            return;
+        }
+
+        if (carnetIngresado) {
+            inputCarnet.value = carnet;
+        }
+
+        limpiarError();
+        limpiarResultado();
+        actualizarCamposBusqueda();
+        btnBuscar.disabled = true;
+        btnBuscar.textContent = 'Buscando...';
+
+        try {
+            const params = new URLSearchParams();
+            if (carnetIngresado) params.set('carnet', carnet);
+            if (cedulaIngresada) params.set('cedula', cedulaIngresada);
+
+            const response = await fetch(`/api/buscar-agremiado?${params.toString()}`);
+            const data = await response.json();
+
+            if (response.ok && data.success) {
+                // Muestra al usuario los datos encontrados y prepara los hidden para el POST.
+                document.getElementById('nombreCompleto').textContent = data.nombreCompleto;
+                document.getElementById('cedulaMostrada').textContent = data.cedula || '-';
+                document.getElementById('carnetMostrado').textContent = data.cardCode;
+
+                document.getElementById('agremiadoHidden').value = data.cardCode;
+                document.getElementById('nombreCompletoHidden').value = data.nombreCompleto;
+                document.getElementById('cedulaHidden').value = data.cedula || '';
+
+                resultadoBusqueda.classList.remove('hidden');
+
+                // Regla de negocio: solamente estado "AC" puede registrar visita.
+                // Otros estados se muestran con un mensaje y mantienen oculto el formulario.
+                const estadoAgremiado = String(data.professionalStatus || '').trim().toUpperCase();
+                const estadoActivo = estadoAgremiado === 'AC';
+                const mensajesEstado = {
+                    FA: 'El agremiado esta fallecido',
+                    SU: 'El agremiado esta suspendido',
+                    SV: 'El agremiado se separo voluntariamente del Colegio',
+                    ET: 'El expediente esta en tramite'
+                };
+
+                formGuardar.classList.toggle('hidden', !estadoActivo);
+                btnGuardarRegistro.disabled = !estadoActivo || sinAreas;
+
+                if (!estadoActivo) {
+                    mensajeEstadoAgremiado.textContent = mensajesEstado[estadoAgremiado] || 'El agremiado no se encuentra al dia, favor referir al agremiado a la recepcion para mas detalles';
+                    mensajeEstadoAgremiado.classList.remove('hidden');
+                }
+            } else {
+                mostrarError(data.error || 'No se pudo obtener la informacion del agremiado');
+            }
+        } catch (error) {
+            mostrarError('Error de conexion: ' + error.message);
+        } finally {
+            // Restaura el boton aunque la consulta falle o el servicio responda con error.
+            btnBuscar.disabled = false;
+            btnBuscar.textContent = 'Buscar';
+        }
+    });
+
+    [inputCarnet, inputCedulaBusqueda].forEach((input) => {
+        // Enter ejecuta la misma accion que el boton Buscar.
+        input.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                btnBuscar.click();
+            }
+        });
+
+        input.addEventListener('input', () => {
+            // Cualquier cambio invalida el resultado anterior para evitar registrar datos viejos.
+            limpiarError();
+            limpiarResultado();
+            actualizarCamposBusqueda();
+        });
+    });
+</script>
+
+<%- include('partials/footer') %>
